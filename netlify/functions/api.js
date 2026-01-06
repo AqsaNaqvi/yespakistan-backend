@@ -1,117 +1,11 @@
-// const nodemailer = require('nodemailer');
-// const Busboy = require('busboy');
-
-// exports.handler = async (event, context) => {
-//   // ✅ CORS HEADERS (Bohat Zaroori hain alag frontend ke liye)
-//   const headers = {
-//     'Access-Control-Allow-Origin': 'https://yespakistan.com', // Security ke liye '*' ko apne frontend URL se replace kar sakti hain baad mein
-//     'Access-Control-Allow-Headers': 'Content-Type',
-//     'Access-Control-Allow-Methods': 'POST, OPTIONS'
-//   };
-
-//   // Pre-flight request handle karein (Browser check karta hai ke server zinda hai ya nahi)
-//   if (event.httpMethod === 'OPTIONS') {
-//     return { statusCode: 200, headers, body: '' };
-//   }
-
-//   if (event.httpMethod !== 'POST') {
-//     return { statusCode: 405, headers, body: 'Method Not Allowed' };
-//   }
-
-//   const fields = {};
-//   const files = [];
-
-//   // Data parsing logic
-//   const parseMultipart = () => new Promise((resolve, reject) => {
-//     const busboy = Busboy({
-//       headers: event.headers,
-//       limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-//     });
-
-//     busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
-//       const buffers = [];
-//       file.on('data', (data) => buffers.push(data));
-//       file.on('end', () => {
-//         files.push({
-//           filename: filename.filename,
-//           content: Buffer.concat(buffers),
-//           contentType: mimetype,
-//         });
-//       });
-//     });
-
-//     busboy.on('field', (fieldname, val) => {
-//       fields[fieldname] = val;
-//     });
-
-//     busboy.on('finish', resolve);
-//     busboy.on('error', reject);
-
-//     busboy.write(event.isBase64Encoded ? Buffer.from(event.body, 'base64') : event.body);
-//     busboy.end();
-//   });
-
-//   try {
-//     await parseMultipart();
-
-//     // Required fields validation
-//     if (!fields.email || !fields.name || !fields.category) {
-//       return { statusCode: 400, headers, body: JSON.stringify({ message: 'Missing required fields' }) };
-//     }
-
-//     // Brevo Configuration
-//     const transporter = nodemailer.createTransport({
-//       host: "smtp-relay.brevo.com",
-//       port: 587,
-//       auth: {
-//         user: process.env.BREVO_USER,
-//         pass: process.env.BREVO_PASS,
-//       },
-//     });
-
-//     const mailOptions = {
-//       from: `"${fields.name}" <${process.env.BREVO_USER}>`, // Sender needs to be verified in Brevo
-//       to: process.env.RECEIVER_EMAIL, // Admin Email
-//       replyTo: fields.email,
-//       subject: `New Story: ${fields.story_title} [${fields.category}]`,
-//       html: `
-//         <h3>New Story Submission</h3>
-//         <p><strong>Name:</strong> ${fields.name}</p>
-//         <p><strong>Email:</strong> ${fields.email}</p>
-//         <p><strong>Category:</strong> ${fields.category}</p>
-//         <p><strong>Title:</strong> ${fields.story_title}</p>
-//         <hr/>
-//         <p style="white-space: pre-wrap;">${fields.message}</p>
-//       `,
-//       attachments: files.length > 0 ? [files[0]] : [],
-//     };
-
-//     await transporter.sendMail(mailOptions);
-
-//     return {
-//       statusCode: 200,
-//       headers,
-//       body: JSON.stringify({ message: 'Story submitted successfully!' }),
-//     };
-
-//   } catch (error) {
-//     console.error('Backend Error:', error);
-//     return {
-//       statusCode: 500,
-//       headers,
-//       body: JSON.stringify({ message: 'Server Error: ' + error.message }),
-//     };
-//   }
-// };
-
 const nodemailer = require('nodemailer');
 const Busboy = require('busboy');
 
 exports.handler = async (event, context) => {
-  // 1. CORS Headers (Allow All)
+  // 1. CORS Headers (Sab allow karein)
   const headers = {
     'Access-Control-Allow-Origin': 'https://yespakistan.com',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS'
   };
 
@@ -126,18 +20,13 @@ exports.handler = async (event, context) => {
   const fields = {};
   const files = [];
 
-  // 2. Helper to handle Busboy parsing
   const parseMultipart = () => new Promise((resolve, reject) => {
-    // FIX: Content-Type header ka case (upper/lower) handle karein
     const contentType = event.headers['content-type'] || event.headers['Content-Type'];
-
-    if (!contentType) {
-        return reject(new Error('Content-Type header missing'));
-    }
+    if (!contentType) return reject(new Error('Content-Type header missing'));
 
     const busboy = Busboy({
       headers: { 'content-type': contentType },
-      limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+      limits: { fileSize: 5 * 1024 * 1024 }
     });
 
     busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
@@ -161,7 +50,6 @@ exports.handler = async (event, context) => {
     busboy.on('finish', resolve);
     busboy.on('error', reject);
 
-    // Data write karein
     busboy.write(event.isBase64Encoded ? Buffer.from(event.body, 'base64') : event.body);
     busboy.end();
   });
@@ -169,26 +57,22 @@ exports.handler = async (event, context) => {
   try {
     await parseMultipart();
 
-    // 3. Debugging: Check karein kya fields aye hain (Netlify Logs mein dikhega)
-    console.log("Received Fields:", fields);
-
-    // 4. Validation (Check karein kya missing hai)
-    const missingFields = [];
-    if (!fields.name) missingFields.push('name');
-    if (!fields.email) missingFields.push('email');
-    if (!fields.category) missingFields.push('category');
-
-    if (missingFields.length > 0) {
+    // 2. Validation (Category ko hata diya hai taake Internship form fail na ho)
+    // Agar Name ya Email na ho to error aye, magar category k baghair chal jaye
+    if (!fields.name || !fields.email) {
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ 
-            message: `Missing required fields: ${missingFields.join(', ')}` 
-        })
+        body: JSON.stringify({ message: 'Missing Name or Email' })
       };
     }
 
-    // 5. Brevo Email Sending
+    // Default Values set karein agar form se na ayen
+    const category = fields.category || 'General/Internship';
+    const title = fields.story_title || 'New Form Submission';
+    const message = fields.message || 'No message content provided.';
+
+    // 3. Brevo Email Logic
     const transporter = nodemailer.createTransport({
       host: "smtp-relay.brevo.com",
       port: 587,
@@ -199,18 +83,19 @@ exports.handler = async (event, context) => {
     });
 
     const mailOptions = {
-      from: `"${fields.name}" <${process.env.BREVO_USER}>`,
-      to: process.env.RECEIVER_EMAIL,
+      from: `"${fields.name}" <${process.env.BREVO_USER}>`, // Sender
+      to: process.env.RECEIVER_EMAIL, // Receiver
       replyTo: fields.email,
-      subject: `New Story: ${fields.story_title || 'Untitled'}`,
+      subject: `New Submission: ${title} [${category}]`,
       html: `
-        <h3>New Story Submission</h3>
+        <h3>New Submission Received</h3>
         <p><strong>Name:</strong> ${fields.name}</p>
         <p><strong>Email:</strong> ${fields.email}</p>
-        <p><strong>Category:</strong> ${fields.category}</p>
-        <p><strong>Title:</strong> ${fields.story_title}</p>
+        <p><strong>Type/Category:</strong> ${category}</p>
+        <p><strong>Title:</strong> ${title}</p>
         <hr/>
-        <p style="white-space: pre-wrap;">${fields.message}</p>
+        <h4>Message/Details:</h4>
+        <p style="white-space: pre-wrap;">${message}</p>
       `,
       attachments: files.length > 0 ? [files[0]] : [],
     };
@@ -220,15 +105,25 @@ exports.handler = async (event, context) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ message: 'Story submitted successfully!' }),
+      body: JSON.stringify({ message: 'Submitted successfully!' }),
     };
 
   } catch (error) {
-    console.error('Processing Error:', error);
+    console.error('Error:', error);
+    
+    // Agar Password ghalat hai to ye error wapis frontend ko bhejo
+    if(error.code === 'EAUTH') {
+        return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ message: 'Email Configuration Error: Invalid Login/Password' }),
+        };
+    }
+
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ message: error.message || 'Server Error' }),
+      body: JSON.stringify({ message: 'Server Error: ' + error.message }),
     };
   }
 };
