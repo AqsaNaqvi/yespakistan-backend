@@ -50,8 +50,7 @@ exports.handler = async (event, context) => {
     // Email Sending
     const transporter = nodemailer.createTransport({
       host: "smtp-relay.brevo.com",
-      port: 465,
-      secure: true,
+      port: 587,
       auth: {
         user: process.env.BREVO_USER,
         pass: process.env.BREVO_PASS,
