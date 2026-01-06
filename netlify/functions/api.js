@@ -1,93 +1,105 @@
 const nodemailer = require('nodemailer');
 const Busboy = require('busboy');
-//test
+
 exports.handler = async (event, context) => {
+  // 1. CORS Headers (Frontend ko allow karein)
   const headers = {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': 'https://yespakistan.com',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS'
   };
 
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
-  // DEBUGGING: Agar environment variables load nahi huye to batao
-  if (!process.env.BREVO_USER || !process.env.BREVO_PASS) {
-      return {
-          statusCode: 500,
-          headers,
-          body: JSON.stringify({ message: 'Environment Variables Missing on Server' })
-      };
-  }
+  // 2. Data Parse Karne Ka Logic
+  const fields = {};
+  const files = [];
 
-  try {
-    const fields = {};
-    const files = [];
+  const parseMultipart = () => new Promise((resolve, reject) => {
+    const contentType = event.headers['content-type'] || event.headers['Content-Type'];
+    if (!contentType) return reject(new Error('Content-Type header missing'));
 
-    // Busboy processing inside a Promise
-    await new Promise((resolve, reject) => {
-      const contentType = event.headers['content-type'] || event.headers['Content-Type'];
-      if (!contentType) return reject(new Error('Content-Type header missing'));
+    const busboy = Busboy({ headers: { 'content-type': contentType } });
 
-      const busboy = Busboy({ headers: { 'content-type': contentType } });
-
-      busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
-        const buffers = [];
-        file.on('data', data => buffers.push(data));
-        file.on('end', () => {
-          if (buffers.length > 0) {
-            files.push({ filename: filename.filename, content: Buffer.concat(buffers), contentType: mimetype });
-          }
-        });
+    busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
+      const buffers = [];
+      file.on('data', data => buffers.push(data));
+      file.on('end', () => {
+        if (buffers.length > 0) {
+          files.push({
+            filename: filename.filename,
+            content: Buffer.concat(buffers),
+            contentType: mimetype
+          });
+        }
       });
-
-      busboy.on('field', (fieldname, val) => fields[fieldname] = val);
-      busboy.on('finish', resolve);
-      busboy.on('error', reject);
-      busboy.write(event.isBase64Encoded ? Buffer.from(event.body, 'base64') : event.body);
-      busboy.end();
     });
 
-    // Email Sending
+    busboy.on('field', (fieldname, val) => fields[fieldname] = val);
+    busboy.on('finish', resolve);
+    busboy.on('error', reject);
+    busboy.write(event.isBase64Encoded ? Buffer.from(event.body, 'base64') : event.body);
+    busboy.end();
+  });
+
+  try {
+    await parseMultipart();
+
+    // 3. Validation (Check required fields)
+    if (!fields.name || !fields.email) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ message: 'Name and Email are required.' })
+      };
+    }
+
+    // 4. GMAIL Configuration (Daakiya)
     const transporter = nodemailer.createTransport({
-      host: "smtp-relay.brevo.com",
-      port: 587,
+      service: 'gmail',
       auth: {
-        user: process.env.BREVO_USER,
-        pass: process.env.BREVO_PASS,
+        user: process.env.GMAIL_USER, // Netlify variable se ayega
+        pass: process.env.GMAIL_PASS, // Netlify variable se ayega
       },
     });
 
-    // Verify connection first (Taake pata chale login ghalat hai ya kuch aur)
-    try {
-        await transporter.verify();
-    } catch (verifyError) {
-        throw new Error(`SMTP Connection Failed: ${verifyError.message}`);
-    }
-
+    // 5. Email Setup
     const mailOptions = {
-      from: `"${fields.name || 'User'}" <${process.env.BREVO_USER}>`,
-      to: process.env.RECEIVER_EMAIL,
-      replyTo: fields.email,
-      subject: `Submission: ${fields.story_title || 'New Entry'}`,
-      html: `<p>Name: ${fields.name}</p><p>Email: ${fields.email}</p><p>Message: ${fields.message}</p>`,
+      from: `"Yes Pakistan Form" <${process.env.GMAIL_USER}>`, // Bhejne wala (Gmail)
+      to: process.env.RECEIVER_EMAIL, // Receive karne wala (info@yespakistan.com)
+      replyTo: fields.email, // Reply user ko jaye
+      subject: `New Submission: ${fields.story_title || 'Contact Form'}`,
+      html: `
+        <h3>New Form Submission</h3>
+        <p><strong>Name:</strong> ${fields.name}</p>
+        <p><strong>Email:</strong> ${fields.email}</p>
+        <p><strong>Category:</strong> ${fields.category || 'N/A'}</p>
+        <p><strong>Title:</strong> ${fields.story_title || 'N/A'}</p>
+        <hr/>
+        <h4>Message:</h4>
+        <p style="white-space: pre-wrap;">${fields.message}</p>
+      `,
       attachments: files.length > 0 ? [files[0]] : [],
     };
 
+    // Email Send Karein
     await transporter.sendMail(mailOptions);
 
-    return { statusCode: 200, headers, body: JSON.stringify({ message: 'Success' }) };
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ message: 'Submitted successfully!' }),
+    };
 
   } catch (error) {
-    // 🔴 ASAL ERROR YAHAN DIKHEGA
-    console.error(error);
+    console.error('Error:', error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({
-        message: 'Submission Failed',
-        detailedError: error.message, // Ye apko bataega k masla kya hai
-        code: error.code
-      })
+      body: JSON.stringify({ 
+        message: 'Failed to send email.', 
+        error: error.message 
+      }),
     };
   }
 };
