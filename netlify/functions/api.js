@@ -52,8 +52,9 @@ exports.handler = async (event, context) => {
       host: "smtp-relay.brevo.com",
       port: 587,
       auth: {
-        user: process.env.BREVO_USER,
-        pass: process.env.BREVO_PASS,
+        user: "info@yespakistan.com",
+        // pass: process.env.BREVO_PASS,
+        pass: "xsmtpsib-bafe22991c744e0751fee39b05ea4dd0e3063fb62ec1007c03c5730948669409-5PGssHgLgLazIAnL"
       },
     });
 
