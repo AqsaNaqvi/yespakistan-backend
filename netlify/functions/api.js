@@ -4,7 +4,7 @@ const Busboy = require('busboy');
 exports.handler = async (event, context) => {
   // ✅ CORS HEADERS (Bohat Zaroori hain alag frontend ke liye)
   const headers = {
-    'Access-Control-Allow-Origin': '*', // Security ke liye '*' ko apne frontend URL se replace kar sakti hain baad mein
+    'Access-Control-Allow-Origin': 'https://yespakistan.com/', // Security ke liye '*' ko apne frontend URL se replace kar sakti hain baad mein
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS'
   };
