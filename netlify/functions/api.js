@@ -136,66 +136,29 @@
 // };
 const nodemailer = require('nodemailer');
 const Busboy = require('busboy');
-const axios = require('axios'); // Google API call ke liye
+const axios = require('axios');
 
 exports.handler = async (event, context) => {
-  // 1. CORS Headers
   const headers = {
     'Access-Control-Allow-Origin': '*', 
     'Access-Control-Allow-Headers': 'Content-Type, Accept',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
   };
 
-  // 2. Pre-flight check
   if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ message: 'Successful preflight call.' })
-    };
+    return { statusCode: 200, headers, body: JSON.stringify({ message: 'Preflight OK' }) };
   }
 
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: 'Method Not Allowed' };
-  }
-
-  // --- Security Helper: Malicious Content Check ---
-  const isMalicious = (data) => {
-    const forbiddenPatterns = [
-      /<script/i, /javascript:/i, /<iframe/i, /<object/i,
-      /document\.cookie/i, /eval\(/i, /base64/i
-    ];
-    const contentString = JSON.stringify(data).toLowerCase();
-    for (let pattern of forbiddenPatterns) {
-      if (pattern.test(contentString)) return true;
-    }
-    return false;
-  };
-
-  // 3. Data Parse Logic
   const fields = {};
   const files = [];
 
   const parseMultipart = () => new Promise((resolve, reject) => {
-    const contentType = event.headers['content-type'] || event.headers['Content-Type'];
-    if (!contentType) return reject(new Error('Content-Type header missing'));
-
-    const busboy = Busboy({ headers: { 'content-type': contentType } });
-
+    const busboy = Busboy({ headers: { 'content-type': event.headers['content-type'] || event.headers['Content-Type'] } });
     busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
       const buffers = [];
       file.on('data', data => buffers.push(data));
-      file.on('end', () => {
-        if (buffers.length > 0) {
-          files.push({
-            filename: filename.filename,
-            content: Buffer.concat(buffers),
-            contentType: mimetype
-          });
-        }
-      });
+      file.on('end', () => { if (buffers.length > 0) files.push({ filename: filename.filename, content: Buffer.concat(buffers), contentType: mimetype }); });
     });
-
     busboy.on('field', (fieldname, val) => fields[fieldname] = val);
     busboy.on('finish', resolve);
     busboy.on('error', reject);
@@ -206,116 +169,70 @@ exports.handler = async (event, context) => {
   try {
     await parseMultipart();
 
-    // --- SECURITY CHECK 1: Malicious Content Validation ---
-    if (isMalicious(fields)) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ message: 'Security Alert: Malicious content or scripts detected.' })
-      };
+    // --- reCAPTCHA VERIFICATION ---
+    const token = fields['g-recaptcha-response'];
+    const secret = process.env.RECAPTCHA_SECRET_KEY;
+
+    // DEBUGGING LOGS (Check these in Netlify Functions Logs)
+    console.log("Token Received:", token ? "Yes (Length: " + token.length + ")" : "No");
+    console.log("Secret Key Present:", secret ? "Yes" : "No");
+
+    if (!token || !secret) {
+      return { statusCode: 400, headers, body: JSON.stringify({ message: 'Captcha token or Secret Key missing' }) };
     }
 
-    // --- SECURITY CHECK 2: reCAPTCHA Verification ---
-    const recaptchaToken = fields['g-recaptcha-response'];
-    if (!recaptchaToken) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ message: 'Captcha verification is required.' })
-      };
-    }
+    // Google API Call using URLSearchParams (Most Stable Method)
+    const params = new URLSearchParams();
+    params.append('secret', secret);
+    params.append('response', token);
 
-    const verificationUrl = `https://www.google.com/recaptcha/api/siteverify`;
-    const recaptchaRes = await axios.post(
-      verificationUrl,
-      null, 
-      {
-        params: {
-          secret: process.env.RECAPTCHA_SECRET_KEY,
-          response: recaptchaToken
-        }
-      }
-    );
+    const recaptchaRes = await axios.post('https://www.google.com/recaptcha/api/siteverify', params.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    console.log("Google Response:", recaptchaRes.data);
 
     if (!recaptchaRes.data.success) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ message: 'Captcha verification failed. Please try again.' })
+      return { 
+        statusCode: 403, 
+        headers, 
+        body: JSON.stringify({ 
+          message: 'Captcha verification failed. Please try again.',
+          errors: recaptchaRes.data['error-codes'] 
+        }) 
       };
     }
 
-    // 4. Email Content Logic (No Data Lost)
-    const userName = fields.name || fields.full_name || fields.your_name || "User";
-    const userEmail = fields.email || fields.email_address || fields.your_email || "no-reply@example.com";
-    const formTitle = fields.form_name || fields.story_title || "New Website Submission";
+    // --- EMAIL LOGIC ---
+    const userEmail = fields.email || "no-reply@yespakistan.com";
+    const formTitle = fields.form_name || "New Submission";
 
-    let emailHtml = `
-      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-        <h2 style="color: #009876;">Form received from Yespakistan website</h2>
-        <hr style="border: 1px solid #eee; margin-bottom: 20px;" />
-    `;
-
-    if (fields.name || fields.full_name || fields.your_name) {
-        emailHtml += `<p><strong>Name:</strong> ${userName}</p>`;
-    }
-    if (fields.email || fields.email_address || fields.your_email) {
-        emailHtml += `<p><strong>Email:</strong> ${userEmail}</p>`;
-    }
-
-    // Dynamic Loop for other fields (Skips security tokens)
+    let emailHtml = `<div style="font-family: Arial; padding: 20px;">
+                      <h2>New Form Submission</h2><hr/>`;
     for (const [key, value] of Object.entries(fields)) {
-        const skipKeys = ['name', 'full_name', 'your_name', 'email', 'email_address', 'your_email', 'form_name', 'attachment', 'g-recaptcha-response'];
-        
-        if (!skipKeys.includes(key) && value && value.trim() !== "") {
-            let label = key.replace(/_/g, ' ').replace(/-/g, ' ');
-            label = label.charAt(0).toUpperCase() + label.slice(1);
-
-            if (value.length > 50) {
-                emailHtml += `
-                  <div style="margin-top: 15px; margin-bottom: 15px;">
-                    <strong style="color: #555;">${label}:</strong><br/>
-                    <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 5px;">${value}</div>
-                  </div>`;
-            } else {
-                emailHtml += `<p><strong>${label}:</strong> ${value}</p>`;
-            }
-        }
+        if (key === 'g-recaptcha-response') continue;
+        emailHtml += `<p><strong>${key.toUpperCase()}:</strong> ${value}</p>`;
     }
     emailHtml += `</div>`;
 
-    // 5. Send Email via Gmail
     const transporter = nodemailer.createTransport({
       service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS,
-      },
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_PASS },
     });
 
-    const mailOptions = {
-      from: `"Yes Pakistan Form" <${process.env.GMAIL_USER}>`,
-      to: `${process.env.RECEIVER_EMAIL}, awad@vendorr.ae`, 
+    await transporter.sendMail({
+      from: `"Yes Pakistan" <${process.env.GMAIL_USER}>`,
+      to: `${process.env.RECEIVER_EMAIL}, awad@vendorr.ae`,
       replyTo: userEmail,
-      subject: `New Submission: ${formTitle}`,
+      subject: formTitle,
       html: emailHtml,
       attachments: files.length > 0 ? [files[0]] : [],
-    };
+    });
 
-    await transporter.sendMail(mailOptions);
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ message: 'Success! Form submitted.' })
-    };
+    return { statusCode: 200, headers, body: JSON.stringify({ message: 'Success! Form submitted.' }) };
 
   } catch (error) {
-    console.error('Error:', error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ message: error.message })
-    };
+    console.error('Final Error:', error);
+    return { statusCode: 500, headers, body: JSON.stringify({ message: error.message }) };
   }
 };
