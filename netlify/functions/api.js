@@ -136,7 +136,7 @@
 // };
 const nodemailer = require('nodemailer');
 const Busboy = require('busboy');
-const axios = require('axios'); // Google API call ke liye
+const axios = require('axios');
 
 exports.handler = async (event, context) => {
   const headers = {
@@ -149,31 +149,16 @@ exports.handler = async (event, context) => {
     return { statusCode: 200, headers, body: JSON.stringify({ message: 'Successful preflight call.' }) };
   }
 
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: 'Method Not Allowed' };
-  }
-
   const fields = {};
   const files = [];
 
-  // --- Security Function 1: Malicious Content Checker ---
   const isMalicious = (data) => {
-    const forbiddenPatterns = [
-      /<script/i, /javascript:/i, /onerror/i, /onclick/i, /<iframe/i, /<object/i,
-      /document\.cookie/i, /eval\(/i, /base64/i
-    ];
-    // Spam keywords (optional)
-    const spamKeywords = ['casino', 'viagra', 'crypto', 'bitcoin', 'poker'];
-
+    const forbiddenPatterns = [/<script/i, /javascript:/i, /<iframe/i, /document\.cookie/i, /eval\(/i];
     const contentString = JSON.stringify(data).toLowerCase();
-
     for (let pattern of forbiddenPatterns) {
-      if (pattern.test(contentString)) return { malicious: true, reason: 'Scripting detected' };
+      if (pattern.test(contentString)) return true;
     }
-    for (let word of spamKeywords) {
-      if (contentString.includes(word)) return { malicious: true, reason: 'Spam keyword detected' };
-    }
-    return { malicious: false };
+    return false;
   };
 
   const parseMultipart = () => new Promise((resolve, reject) => {
@@ -200,46 +185,45 @@ exports.handler = async (event, context) => {
   try {
     await parseMultipart();
 
-    // --- Security Check 2: Malicious Content Validation ---
-    const checkResult = isMalicious(fields);
-    if (checkResult.malicious) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ message: `Security Alert: ${checkResult.reason}` })
-      };
+    // --- 1. Malicious Check ---
+    if (isMalicious(fields)) {
+      return { statusCode: 403, headers, body: JSON.stringify({ message: 'Security Alert: Malicious content detected' }) };
     }
 
-    // --- Security Check 3: reCAPTCHA Verification ---
-    // Backend code mein ye change karke deploy karein
-const verificationUrl = `https://www.google.com/recaptcha/api/siteverify`;
-const recaptchaRes = await axios.post(
-  verificationUrl,
-  null, // No body
-  {
-    params: {
-      secret: process.env.RECAPTCHA_SECRET_KEY,
-      response: recaptchaToken
+    // --- 2. CAPTCHA VERIFICATION (The Fix is here) ---
+    const token = fields['g-recaptcha-response']; // Yahan se token uthaya
+
+    if (!token) {
+      return { statusCode: 400, headers, body: JSON.stringify({ message: 'Captcha token is missing' }) };
     }
-  }
-);
-    
+
+    // Google API call
+    const verificationUrl = `https://www.google.com/recaptcha/api/siteverify`;
+    const recaptchaRes = await axios.post(
+      verificationUrl,
+      null, 
+      {
+        params: {
+          secret: process.env.RECAPTCHA_SECRET_KEY, // Netlify env variable
+          response: token // "token" variable jo upar define kiya hai
+        }
+      }
+    );
+
     if (!recaptchaRes.data.success) {
       return { statusCode: 403, headers, body: JSON.stringify({ message: 'Captcha verification failed' }) };
     }
 
-    // --- Email Logic (Wohi purani wali) ---
-    const userName = fields.name || fields.full_name || fields.your_name || "User";
-    const userEmail = fields.email || fields.email_address || fields.your_email || "no-reply@example.com";
-    const formTitle = fields.form_name || fields.story_title || "New Website Submission";
+    // --- 3. Email Logic ---
+    const userEmail = fields.email || "no-reply@yespakistan.com";
+    const formTitle = fields.form_name || "New Submission";
 
-    let emailHtml = `<div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+    let emailHtml = `<div style="font-family: Arial; padding: 20px; color: #333;">
                       <h2 style="color: #009876;">Form received from Yespakistan website</h2><hr/>`;
 
     for (const [key, value] of Object.entries(fields)) {
-        if (key === 'g-recaptcha-response') continue; // Captcha token email mein na bhejin
-        let label = key.replace(/[/_|-]/g, ' ');
-        label = label.charAt(0).toUpperCase() + label.slice(1);
+        if (key === 'g-recaptcha-response') continue;
+        let label = key.replace(/[/_|-]/g, ' ').toUpperCase();
         emailHtml += `<p><strong>${label}:</strong> ${value}</p>`;
     }
     emailHtml += `</div>`;
@@ -250,7 +234,7 @@ const recaptchaRes = await axios.post(
     });
 
     await transporter.sendMail({
-      from: `"Yes Pakistan Form" <${process.env.GMAIL_USER}>`,
+      from: `"Yes Pakistan" <${process.env.GMAIL_USER}>`,
       to: `${process.env.RECEIVER_EMAIL}, awad@vendorr.ae`, 
       replyTo: userEmail,
       subject: `New Submission: ${formTitle}`,
@@ -261,7 +245,11 @@ const recaptchaRes = await axios.post(
     return { statusCode: 200, headers, body: JSON.stringify({ message: 'Success! Form submitted.' }) };
 
   } catch (error) {
-    console.error('Error:', error);
-    return { statusCode: 500, headers, body: JSON.stringify({ message: error.message }) };
+    console.error('Backend Error:', error);
+    return { 
+      statusCode: 500, 
+      headers, 
+      body: JSON.stringify({ message: error.message }) // Ye error message debug karne mein help karega
+    };
   }
 };
