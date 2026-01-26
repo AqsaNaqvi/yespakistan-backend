@@ -211,13 +211,18 @@ exports.handler = async (event, context) => {
     }
 
     // --- Security Check 3: reCAPTCHA Verification ---
-    const recaptchaToken = fields['g-recaptcha-response'];
-    if (!recaptchaToken) {
-      return { statusCode: 400, headers, body: JSON.stringify({ message: 'Please complete the Captcha' }) };
+    // Backend code mein ye change karke deploy karein
+const verificationUrl = `https://www.google.com/recaptcha/api/siteverify`;
+const recaptchaRes = await axios.post(
+  verificationUrl,
+  null, // No body
+  {
+    params: {
+      secret: process.env.RECAPTCHA_SECRET_KEY,
+      response: recaptchaToken
     }
-
-    const verificationUrl = `https://www.google.com/recaptcha/api/siteverify?secret=${process.env.RECAPTCHA_SECRET_KEY}&response=${recaptchaToken}`;
-    const recaptchaRes = await axios.post(verificationUrl);
+  }
+);
     
     if (!recaptchaRes.data.success) {
       return { statusCode: 403, headers, body: JSON.stringify({ message: 'Captcha verification failed' }) };
