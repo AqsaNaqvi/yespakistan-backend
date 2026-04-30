@@ -298,7 +298,7 @@ exports.handler = async (event, context) => {
 
     const mailOptions = {
       from: `"Yes Pakistan Form" <${process.env.GMAIL_USER}>`,
-      to: `${process.env.RECEIVER_EMAIL}, awad@vendorr.ae`, 
+      to: `${process.env.RECEIVER_EMAIL}`, 
       replyTo: userEmail,
       subject: `New Submission: ${formTitle}`,
       html: emailHtml,
