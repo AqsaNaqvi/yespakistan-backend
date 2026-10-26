@@ -1,6 +1,7 @@
 
 // const nodemailer = require('nodemailer');
 // const Busboy = require('busboy');
+// const axios = require('axios'); // Captcha verify karne ke liye
 
 // exports.handler = async (event, context) => {
 //   // 1. CORS Headers
@@ -22,6 +23,19 @@
 //   if (event.httpMethod !== 'POST') {
 //     return { statusCode: 405, headers, body: 'Method Not Allowed' };
 //   }
+
+//   // --- SECURITY HELPER: Malicious Content Check ---
+//   const isMalicious = (data) => {
+//     const forbiddenPatterns = [
+//       /<script/i, /javascript:/i, /<iframe/i, /<object/i,
+//       /document\.cookie/i, /eval\(/i, /base64/i
+//     ];
+//     const contentString = JSON.stringify(data).toLowerCase();
+//     for (let pattern of forbiddenPatterns) {
+//       if (pattern.test(contentString)) return true;
+//     }
+//     return false;
+//   };
 
 //   // 3. Data Parse Logic
 //   const fields = {};
@@ -57,7 +71,48 @@
 //   try {
 //     await parseMultipart();
 
-//     // 4. Email Content Logic
+//     // --- SECURITY CHECK 1: Malicious Content ---
+//     if (isMalicious(fields)) {
+//       return {
+//         statusCode: 403,
+//         headers,
+//         body: JSON.stringify({ message: 'Security Alert: Malicious scripts detected.' })
+//       };
+//     }
+
+//     // --- SECURITY CHECK 2: reCAPTCHA v2 Verification ---
+//     const token = fields['g-recaptcha-response'];
+//     const secret = process.env.RECAPTCHA_SECRET_KEY;
+
+//     if (!token) {
+//       return {
+//         statusCode: 400,
+//         headers,
+//         body: JSON.stringify({ message: 'Captcha token missing. Please try again.' })
+//       };
+//     }
+
+//     // Stable Verification via URLSearchParams
+//     const params = new URLSearchParams();
+//     params.append('secret', secret);
+//     params.append('response', token);
+
+//     const recaptchaRes = await axios.post(
+//       'https://www.google.com/recaptcha/api/siteverify', 
+//       params.toString(), 
+//       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+//     );
+
+//     if (!recaptchaRes.data.success) {
+//       console.log("Google Rejection:", recaptchaRes.data);
+//       return {
+//         statusCode: 403,
+//         headers,
+//         body: JSON.stringify({ message: 'Captcha verification failed. Please refresh and try again.' })
+//       };
+//     }
+
+//     // 4. Email Content Logic (Exactly as you provided)
 //     const userName = fields.name || fields.full_name || fields.your_name || "User";
 //     const userEmail = fields.email || fields.email_address || fields.your_email || "no-reply@example.com";
 //     const formTitle = fields.form_name || fields.story_title || "New Website Submission";
@@ -75,9 +130,10 @@
 //         emailHtml += `<p><strong>Email:</strong> ${userEmail}</p>`;
 //     }
 
-//     // Dynamic Loop for other fields
+//     // Dynamic Loop for other fields (Skip security keys)
 //     for (const [key, value] of Object.entries(fields)) {
-//         const skipKeys = ['name', 'full_name', 'your_name', 'email', 'email_address', 'your_email', 'form_name', 'attachment'];
+//         // g-recaptcha-response ko skip kiya taake email mein kachra na aaye
+//         const skipKeys = ['name', 'full_name', 'your_name', 'email', 'email_address', 'your_email', 'form_name', 'attachment', 'g-recaptcha-response'];
         
 //         if (!skipKeys.includes(key) && value && value.trim() !== "") {
 //             let label = key.replace(/_/g, ' ').replace(/-/g, ' ');
@@ -107,10 +163,7 @@
 
 //     const mailOptions = {
 //       from: `"Yes Pakistan Form" <${process.env.GMAIL_USER}>`,
-      
-//       // ✅ CHANGE IS HERE: Added comma and second email
-//       to: `${process.env.RECEIVER_EMAIL}, awad@vendorr.ae`, 
-      
+//       to: `${process.env.RECEIVER_EMAIL}`, 
 //       replyTo: userEmail,
 //       subject: `New Submission: ${formTitle}`,
 //       html: emailHtml,
@@ -134,9 +187,17 @@
 //     };
 //   }
 // };
+
+
 const nodemailer = require('nodemailer');
 const Busboy = require('busboy');
 const axios = require('axios'); // Captcha verify karne ke liye
+const { createClient } = require('@supabase/supabase-js'); // 🚀 1. Supabase Import
+
+// 🚀 2. Supabase Client Initialize
+const supabaseUrl = process.env.SUPABASE_URL || 'https://pzsrbgwvubnxgfnufsug.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY; // Aapki Secret Key
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 exports.handler = async (event, context) => {
   // 1. CORS Headers
@@ -159,6 +220,63 @@ exports.handler = async (event, context) => {
     return { statusCode: 405, headers, body: 'Method Not Allowed' };
   }
 
+  // =========================================================================
+  // 🚀 3. PAGE TRACKING & COOKIE HANDLER (SUPABASE)
+  // =========================================================================
+  // Agar request tracking ki aayi ho toh ye block handle karega
+  const contentType = (event.headers['content-type'] || event.headers['Content-Type'] || '').toLowerCase();
+  const isTrackingRequest = (event.path && event.path.includes('track-page')) || contentType.includes('application/json');
+
+  if (isTrackingRequest) {
+    try {
+      let bodyData = {};
+      if (event.body) {
+        bodyData = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+      }
+
+      // Check karein ke tracking data mojood hai
+      if (bodyData.visitor_id && bodyData.page_path) {
+        const ip_address = event.headers['x-forwarded-for'] || event.headers['client-ip'] || 'unknown';
+        const user_agent = event.headers['user-agent'] || 'unknown';
+
+        const { error: dbError } = await supabase
+          .from('visitor_page_views')
+          .insert([
+            {
+              visitor_id: bodyData.visitor_id,
+              page_path: bodyData.page_path,
+              page_title: bodyData.page_title || '',
+              referrer: bodyData.referrer || 'Direct',
+              ip_address: ip_address.split(',')[0].trim(), // Clean single IP
+              user_agent: user_agent
+            }
+          ]);
+
+        if (dbError) {
+          console.error('Supabase Tracking Error:', dbError);
+          return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ error: dbError.message })
+          };
+        }
+
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ success: true, message: 'Page view tracked' })
+        };
+      }
+    } catch (parseError) {
+      console.error('Tracking parse error:', parseError);
+      // Agar JSON parse fail ho toh aage chalne dein
+    }
+  }
+
+  // =========================================================================
+  // 4. EXISTING FORM SUBMISSION LOGIC (BUSBOY, RECAPTCHA & GMAIL)
+  // =========================================================================
+
   // --- SECURITY HELPER: Malicious Content Check ---
   const isMalicious = (data) => {
     const forbiddenPatterns = [
@@ -172,15 +290,15 @@ exports.handler = async (event, context) => {
     return false;
   };
 
-  // 3. Data Parse Logic
+  // Data Parse Logic
   const fields = {};
   const files = [];
 
   const parseMultipart = () => new Promise((resolve, reject) => {
-    const contentType = event.headers['content-type'] || event.headers['Content-Type'];
-    if (!contentType) return reject(new Error('Content-Type header missing'));
+    const incomingContentType = event.headers['content-type'] || event.headers['Content-Type'];
+    if (!incomingContentType) return reject(new Error('Content-Type header missing'));
 
-    const busboy = Busboy({ headers: { 'content-type': contentType } });
+    const busboy = Busboy({ headers: { 'content-type': incomingContentType } });
 
     busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
       const buffers = [];
@@ -247,7 +365,7 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // 4. Email Content Logic (Exactly as you provided)
+    // Email Content Logic
     const userName = fields.name || fields.full_name || fields.your_name || "User";
     const userEmail = fields.email || fields.email_address || fields.your_email || "no-reply@example.com";
     const formTitle = fields.form_name || fields.story_title || "New Website Submission";
@@ -265,10 +383,9 @@ exports.handler = async (event, context) => {
         emailHtml += `<p><strong>Email:</strong> ${userEmail}</p>`;
     }
 
-    // Dynamic Loop for other fields (Skip security keys)
+    // Dynamic Loop for other fields
     for (const [key, value] of Object.entries(fields)) {
-        // g-recaptcha-response ko skip kiya taake email mein kachra na aaye
-        const skipKeys = ['name', 'full_name', 'your_name', 'email', 'email_address', 'your_email', 'form_name', 'attachment', 'g-recaptcha-response'];
+        const skipKeys = ['name', 'full_name', 'your_name', 'email', 'email_address', 'your_email', 'form_name', 'attachment', 'g-recaptcha-response', 'visitor_id'];
         
         if (!skipKeys.includes(key) && value && value.trim() !== "") {
             let label = key.replace(/_/g, ' ').replace(/-/g, ' ');
@@ -287,7 +404,7 @@ exports.handler = async (event, context) => {
     }
     emailHtml += `</div>`;
 
-    // 5. Send Email via Gmail
+    // Send Email via Gmail
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
