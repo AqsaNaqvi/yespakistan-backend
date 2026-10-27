@@ -413,6 +413,8 @@ exports.handler = async (event, context) => {
       },
     });
 
+
+
     const mailOptions = {
       from: `"Yes Pakistan Form" <${process.env.GMAIL_USER}>`,
       to: `${process.env.RECEIVER_EMAIL}`, 
@@ -423,6 +425,33 @@ exports.handler = async (event, context) => {
     };
 
     await transporter.sendMail(mailOptions);
+    // 5. Send Email via Gmail
+    await transporter.sendMail(mailOptions);
+
+    // =========================================================================
+    // 🚀 NAYA CODE: Form Submission ko Supabase Database mein Save Karna
+    // =========================================================================
+    try {
+      const visitorId = fields.visitor_id || 'unknown';
+      const userPhone = fields.phone || fields.contact || fields.phone_number || fields.whatsapp || '';
+
+      await supabase
+        .from('form_submissions')
+        .insert([
+          {
+            visitor_id: visitorId,
+            form_name: formTitle,
+            name: userName,
+            email: userEmail,
+            phone: userPhone,
+            all_fields: fields
+          }
+        ]);
+      console.log('✅ Form submission saved in Supabase successfully!');
+    } catch (dbSaveErr) {
+      console.error('Supabase form save error (Non-fatal):', dbSaveErr);
+    }
+    // =========================================================================
 
     return {
       statusCode: 200,
@@ -430,6 +459,7 @@ exports.handler = async (event, context) => {
       body: JSON.stringify({ message: 'Success! Form submitted.' })
     };
 
+   
   } catch (error) {
     console.error('Error:', error);
     return {
